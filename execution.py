@@ -12,7 +12,7 @@ import nodes
 
 import comfy.model_management
 
-def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_data={}, cached={}):
+def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, extra_data={}, cached={}):
     valid_inputs = class_def.INPUT_TYPES()
     input_data_all = {}
     for x in inputs:
@@ -20,10 +20,10 @@ def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_da
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in outputs or input_unique_id in cached:
+            if input_unique_id not in output_state or input_unique_id in cached:
                 input_data_all[x] = (None,)
                 continue
-            obj = outputs[input_unique_id][output_index]
+            obj = output_state[input_unique_id]['output'][output_index]
             input_data_all[x] = obj
         else:
             if ("required" in valid_inputs and x in valid_inputs["required"]) or ("optional" in valid_inputs and x in valid_inputs["optional"]):
@@ -116,7 +116,7 @@ def format_value(x):
     else:
         return str(x)
 
-def recursive_execute(server, prompt, outputs, current_item, extra_data, executed, prompt_id, outputs_ui, object_storage, cached, new_outputs):
+def recursive_execute(server, prompt, output_state, current_item, extra_data, executed, prompt_id, outputs_ui, object_storage, cached, new_outputs):
     unique_id = current_item
     inputs = prompt[unique_id]['inputs']
     class_type = prompt[unique_id]['class_type']
@@ -134,22 +134,22 @@ def recursive_execute(server, prompt, outputs, current_item, extra_data, execute
             input_unique_id = input_data[0]
             output_index = input_data[1]
             if input_unique_id not in cached and input_unique_id not in new_outputs:
-                result = recursive_execute(server, prompt, outputs, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage, cached, new_outputs)
+                result = recursive_execute(server, prompt, output_state, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage, cached, new_outputs)
                 if result[0] is not True:
                     # Another node failed further upstream
                     return result
             if input_unique_id not in cached or input_unique_id in new_outputs:
                 is_cached = False
     
-    if is_cached and not is_leaf and unique_id in outputs:
+    if is_cached and not is_leaf and unique_id in output_state:
         cached[unique_id] = True
         return (True, None, None)
 
     input_data_all = None
     try:
-        input_data_all = get_input_data(inputs, class_def, unique_id, outputs, prompt, extra_data)
+        input_data_all = get_input_data(inputs, class_def, unique_id, output_state, prompt, extra_data)
         
-        if unique_id in outputs and unique_id in prompt and hasattr(class_def, 'IS_CHANGED'):
+        if unique_id in output_state and unique_id in prompt and hasattr(class_def, 'IS_CHANGED'):
             try:
                 is_changed_old = prompt[unique_id]['is_changed']
                 is_changed = map_node_over_list(class_def, input_data_all, "IS_CHANGED")
@@ -160,8 +160,8 @@ def recursive_execute(server, prompt, outputs, current_item, extra_data, execute
             except:
                 pass
         
-        if unique_id in outputs:
-            d = outputs.pop(unique_id)
+        if unique_id in output_state:
+            d = output_state.pop(unique_id)
             del d
         
         if server.client_id is not None:
@@ -174,7 +174,9 @@ def recursive_execute(server, prompt, outputs, current_item, extra_data, execute
             object_storage[(unique_id, class_type)] = obj
 
         output_data, output_ui = get_output_data(obj, input_data_all)
-        outputs[unique_id] = output_data
+        output_state[unique_id] = {}
+        output_state[unique_id]['output'] = output_data
+        output_state[unique_id]['class_type'] = class_type
         new_outputs[unique_id] = True
         if len(output_ui) > 0:
             outputs_ui[unique_id] = output_ui
@@ -199,8 +201,8 @@ def recursive_execute(server, prompt, outputs, current_item, extra_data, execute
                 input_data_formatted[name] = [format_value(x) for x in inputs]
 
         output_data_formatted = {}
-        for node_id, node_outputs in outputs.items():
-            output_data_formatted[node_id] = [[format_value(x) for x in l] for l in node_outputs]
+        for node_id, node_outputs in output_state.items():
+            output_data_formatted[node_id] = [[format_value(x) for x in l] for l in node_outputs['output']]
 
         logging.error(f"!!! Exception during processing!!! {ex}")
         logging.error(traceback.format_exc())
@@ -241,7 +243,7 @@ def recursive_will_execute(prompt, cached, current_item, memo={}):
     memo[unique_id] = will_execute + [unique_id]
     return memo[unique_id]
 
-def recursive_output_delete_if_changed(prompt, old_prompt, outputs, current_item, cached):
+def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current_item, cached):
     unique_id = current_item
     inputs = prompt[unique_id]['inputs']
     class_type = prompt[unique_id]['class_type']
@@ -250,11 +252,11 @@ def recursive_output_delete_if_changed(prompt, old_prompt, outputs, current_item
     is_changed_old = ''
     is_changed = ''
     to_delete = False
-    if hasattr(class_def, 'IS_CHANGED') and unique_id in outputs and outputs[unique_id] is prompt[unique_id]:
+    if hasattr(class_def, 'IS_CHANGED'):
         if unique_id in old_prompt and 'is_changed' in old_prompt[unique_id]:
             is_changed_old = old_prompt[unique_id]['is_changed']
         if 'is_changed' not in prompt[unique_id]:
-            input_data_all = get_input_data(inputs, class_def, unique_id, outputs, {}, {}, cached)
+            input_data_all = get_input_data(inputs, class_def, unique_id, output_state, {}, {}, cached)
             if input_data_all is not None:
                 try:
                     #is_changed = class_def.IS_CHANGED(**input_data_all)
@@ -267,7 +269,7 @@ def recursive_output_delete_if_changed(prompt, old_prompt, outputs, current_item
 
     if unique_id in cached:
         return False
-    if unique_id not in outputs:
+    if unique_id not in output_state:
         return True
 
     if not to_delete:
@@ -282,8 +284,8 @@ def recursive_output_delete_if_changed(prompt, old_prompt, outputs, current_item
                 if isinstance(input_data, list):
                     input_unique_id = input_data[0]
                     output_index = input_data[1]
-                    if input_unique_id in outputs and input_unique_id not in cached:
-                        to_delete = recursive_output_delete_if_changed(prompt, old_prompt, outputs, input_unique_id, cached)
+                    if input_unique_id in output_state and input_unique_id not in cached:
+                        to_delete = recursive_output_delete_if_changed(prompt, old_prompt, output_state, input_unique_id, cached)
                     else:
                         to_delete = True
                     if to_delete:
@@ -301,7 +303,7 @@ class PromptExecutor:
         self.reset()
 
     def reset(self):
-        self.outputs = {}
+        self.output_state = {}
         self.object_storage = {}
         self.outputs_ui = {}
         self.status_messages = []
@@ -344,14 +346,14 @@ class PromptExecutor:
         
         # Next, remove the subsequent outputs since they will not be executed
         to_delete = []
-        for o in self.outputs:
+        for o in self.output_state:
             if (o not in current_outputs) and (o not in executed):
                 to_delete += [o]
                 if o in self.old_prompt:
                     d = self.old_prompt.pop(o)
                     del d
         for o in to_delete:
-            d = self.outputs.pop(o)
+            d = self.output_state.pop(o)
             del d
 
     def execute(self, prompt, prompt_id, extra_data={}, execute_outputs=[]):
@@ -368,11 +370,13 @@ class PromptExecutor:
         with torch.inference_mode():
             #delete cached outputs if nodes don't exist for them
             to_delete = []
-            for o in self.outputs:
+            for o in self.output_state:
                 if o not in prompt:
                     to_delete += [o]
+                elif self.output_state[o]['class_type'] != prompt[o]['class_type']:
+                    to_delete += [o]
             for o in to_delete:
-                d = self.outputs.pop(o)
+                d = self.output_state.pop(o)
                 del d
             to_delete = []
             for o in self.object_storage:
@@ -388,7 +392,7 @@ class PromptExecutor:
 
             cached = {}
             for x in prompt:
-                recursive_output_delete_if_changed(prompt, self.old_prompt, self.outputs, x, cached)
+                recursive_output_delete_if_changed(prompt, self.old_prompt, self.output_state, x, cached)
 
             current_outputs = set(cached.keys())
 
@@ -407,19 +411,19 @@ class PromptExecutor:
             while len(to_execute) > 0:
                 #always execute the output that depends on the least amount of unexecuted nodes first
                 memo = {}
-                to_execute = sorted(list(map(lambda a: (len(recursive_will_execute(prompt, self.outputs, a[-1], memo)), a[-1]), to_execute)))
+                to_execute = sorted(list(map(lambda a: (len(recursive_will_execute(prompt, cached, a[-1], memo)), a[-1]), to_execute)))
                 output_node_id = to_execute.pop(0)[-1]
 
                 # This call shouldn't raise anything if there's an error deep in
                 # the actual SD code, instead it will report the node where the
                 # error was raised
-                self.success, error, ex = recursive_execute(self.server, prompt, self.outputs, output_node_id, extra_data, executed, prompt_id, self.outputs_ui, self.object_storage, cached, new_outputs)
+                self.success, error, ex = recursive_execute(self.server, prompt, self.output_state, output_node_id, extra_data, executed, prompt_id, self.outputs_ui, self.object_storage, cached, new_outputs)
                 if self.success is not True:
                     self.handle_execution_error(prompt_id, prompt, current_outputs, executed, error, ex)
                     break
             
             for x in list(self.outputs_ui.keys()):
-                if x not in self.outputs:
+                if x not in self.output_state:
                     d = self.outputs_ui.pop(x)
                     del d
             for x in executed:
