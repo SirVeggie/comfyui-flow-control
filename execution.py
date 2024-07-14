@@ -442,6 +442,13 @@ class PromptExecutor:
                     del d
             for x in executed:
                 self.old_prompt[x] = copy.deepcopy(prompt[x])
+            to_delete = []
+            for x in self.output_state:
+                if self.output_state[x]['state'] == 'dirty':
+                    to_delete += [x]
+            for x in to_delete:
+                d = self.output_state.pop(x)
+                del d
             self.server.last_node_id = None
             if comfy.model_management.DISABLE_SMART_MEMORY:
                 comfy.model_management.unload_all_models()
