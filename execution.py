@@ -119,6 +119,7 @@ def format_value(x):
 def recursive_execute(server, prompt, output_state, current_item, extra_data, executed, prompt_id, outputs_ui, object_storage):
     unique_id = current_item
     inputs = prompt[unique_id]['inputs']
+    input_ids = {}
     class_type = prompt[unique_id]['class_type']
     class_def = nodes.NODE_CLASS_MAPPINGS[class_type]
     if unique_id in output_state and output_state[unique_id]['state'] == 'cached':
@@ -133,6 +134,8 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
             is_leaf = False
             input_unique_id = input_data[0]
             output_index = input_data[1]
+            input_ids[x] = input_unique_id
+            
             if input_unique_id not in output_state or output_state[input_unique_id]['state'] == 'dirty':
                 result = recursive_execute(server, prompt, output_state, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage)
                 if result[0] is not True:
@@ -140,10 +143,16 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
                     return result
             if output_state[input_unique_id]['state'] != 'cached':
                 is_cached = False
+        else:
+            input_ids[x] = 'literal'
     
-    if is_cached and not is_leaf and unique_id in output_state:
-        output_state[unique_id]['state'] = 'cached'
-        return (True, None, None)
+    if unique_id in output_state and not is_leaf:
+        for x in input_ids:
+            if output_state[unique_id]['inputs'][x] != input_ids[x]:
+                is_cached = False
+        if is_cached:
+            output_state[unique_id]['state'] = 'cached'
+            return (True, None, None)
 
     input_data_all = None
     try:
@@ -178,6 +187,7 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
         output_state[unique_id]['output'] = output_data
         output_state[unique_id]['class_type'] = class_type
         output_state[unique_id]['state'] = 'clean'
+        output_state[unique_id]['inputs'] = input_ids
         if len(output_ui) > 0:
             outputs_ui[unique_id] = output_ui
             if server.client_id is not None:
