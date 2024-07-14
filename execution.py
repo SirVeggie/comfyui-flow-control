@@ -20,7 +20,7 @@ def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, ext
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in output_state or (deleting and output_state[input_unique_id]['is_cached']):
+            if input_unique_id not in output_state or (deleting and output_state[input_unique_id]['state'] == 'cached'):
                 input_data_all[x] = (None,)
                 continue
             obj = output_state[input_unique_id]['output'][output_index]
@@ -121,7 +121,7 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
     inputs = prompt[unique_id]['inputs']
     class_type = prompt[unique_id]['class_type']
     class_def = nodes.NODE_CLASS_MAPPINGS[class_type]
-    if unique_id in output_state and output_state[unique_id]['is_cached']:
+    if unique_id in output_state and output_state[unique_id]['state'] == 'cached':
         return (True, None, None)
 
     is_leaf = True
@@ -133,17 +133,16 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
             is_leaf = False
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in output_state or output_state[input_unique_id]['is_dirty']:
+            if input_unique_id not in output_state or output_state[input_unique_id]['state'] == 'dirty':
                 result = recursive_execute(server, prompt, output_state, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage)
                 if result[0] is not True:
                     # Another node failed further upstream
                     return result
-            if not output_state[input_unique_id]['is_cached']:
+            if output_state[input_unique_id]['state'] != 'cached':
                 is_cached = False
     
     if is_cached and not is_leaf and unique_id in output_state:
-        output_state[unique_id]['is_dirty'] = False
-        output_state[unique_id]['is_cached'] = True
+        output_state[unique_id]['state'] = 'cached'
         return (True, None, None)
 
     input_data_all = None
@@ -156,8 +155,7 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
                 is_changed = map_node_over_list(class_def, input_data_all, "IS_CHANGED")
                 prompt[unique_id]['is_changed'] = is_changed
                 if is_changed and is_changed == is_changed_old:
-                    output_state[unique_id]['is_dirty'] = False
-                    output_state[unique_id]['is_cached'] = True
+                    output_state[unique_id]['state'] = 'cached'
                     return (True, None, None)
             except:
                 pass
@@ -179,8 +177,7 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
         output_state[unique_id] = {}
         output_state[unique_id]['output'] = output_data
         output_state[unique_id]['class_type'] = class_type
-        output_state[unique_id]['is_dirty'] = False
-        output_state[unique_id]['is_cached'] = False
+        output_state[unique_id]['state'] = 'clean'
         if len(output_ui) > 0:
             outputs_ui[unique_id] = output_ui
             if server.client_id is not None:
@@ -272,9 +269,9 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
 
     if unique_id not in output_state:
         return True
-    if output_state[unique_id]['is_cached']:
+    if output_state[unique_id]['state'] == 'cached':
         return False
-    if output_state[unique_id]['is_dirty']:
+    if output_state[unique_id]['state'] == 'dirty':
         return True
 
     if not to_delete:
@@ -289,9 +286,9 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
                 if isinstance(input_data, list):
                     input_unique_id = input_data[0]
                     output_index = input_data[1]
-                    if input_unique_id in output_state and not output_state[input_unique_id]['is_cached'] and not output_state[input_unique_id]['is_dirty']:
+                    if input_unique_id in output_state and output_state[input_unique_id]['state'] == 'clean':
                         to_delete = recursive_output_delete_if_changed(prompt, old_prompt, output_state, input_unique_id)
-                    elif input_unique_id not in output_state or not output_state[input_unique_id]['is_cached']:
+                    elif input_unique_id not in output_state or output_state[input_unique_id]['state'] != 'cached':
                         to_delete = True
                     if to_delete:
                         break
@@ -299,9 +296,9 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
             to_delete = True
 
     if to_delete:
-        output_state[unique_id]['is_dirty'] = True
+        output_state[unique_id]['state'] = 'dirty'
     else:
-        output_state[unique_id]['is_cached'] = True
+        output_state[unique_id]['state'] = 'cached'
     return to_delete
 
 class PromptExecutor:
@@ -383,7 +380,7 @@ class PromptExecutor:
                 elif self.output_state[o]['class_type'] != prompt[o]['class_type']:
                     to_delete += [o]
                 else:
-                    self.output_state[o]['is_cached'] = False
+                    self.output_state[o]['state'] = 'clean'
             for o in to_delete:
                 d = self.output_state.pop(o)
                 del d
@@ -402,7 +399,7 @@ class PromptExecutor:
             for x in prompt:
                 recursive_output_delete_if_changed(prompt, self.old_prompt, self.output_state, x)
 
-            current_outputs = set(filter(lambda x: self.output_state[x]['is_cached'], self.output_state.keys()))
+            current_outputs = set(filter(lambda x: self.output_state[x]['state'] == 'cached', self.output_state.keys()))
 
             comfy.model_management.cleanup_models(keep_clone_weights_loaded=True)
             self.add_message("execution_cached",
