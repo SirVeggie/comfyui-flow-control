@@ -12,7 +12,7 @@ import nodes
 
 import comfy.model_management
 
-def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, extra_data={}):
+def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, extra_data={}, deleting=False):
     valid_inputs = class_def.INPUT_TYPES()
     input_data_all = {}
     for x in inputs:
@@ -20,7 +20,7 @@ def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, ext
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in output_state or output_state[input_unique_id]['is_dirty']:
+            if input_unique_id not in output_state or (deleting and output_state[input_unique_id]['is_cached']):
                 input_data_all[x] = (None,)
                 continue
             obj = output_state[input_unique_id]['output'][output_index]
@@ -259,7 +259,7 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
         if unique_id in old_prompt and 'is_changed' in old_prompt[unique_id]:
             is_changed_old = old_prompt[unique_id]['is_changed']
         if 'is_changed' not in prompt[unique_id]:
-            input_data_all = get_input_data(inputs, class_def, unique_id, output_state, {}, {})
+            input_data_all = get_input_data(inputs, class_def, unique_id, output_state, {}, {}, True)
             if input_data_all is not None:
                 try:
                     #is_changed = class_def.IS_CHANGED(**input_data_all)
