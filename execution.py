@@ -148,7 +148,7 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
     
     if unique_id in output_state and not is_leaf:
         for x in input_ids:
-            if output_state[unique_id]['inputs'][x] != input_ids[x]:
+            if x not in output_state[unique_id]['inputs'] or output_state[unique_id]['inputs'][x] != input_ids[x]:
                 is_cached = False
         if is_cached:
             output_state[unique_id]['state'] = 'cached'
