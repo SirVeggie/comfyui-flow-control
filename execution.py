@@ -12,7 +12,7 @@ import nodes
 
 import comfy.model_management
 
-def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, extra_data={}):
+def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, extra_data={}, only_primitive=False):
     valid_inputs = class_def.INPUT_TYPES()
     input_data_all = {}
     for x in inputs:
@@ -20,7 +20,7 @@ def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, ext
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in output_state:
+            if input_unique_id not in output_state or only_primitive:
                 input_data_all[x] = (None,)
                 continue
             obj = output_state[input_unique_id]['output'][output_index]
@@ -116,17 +116,23 @@ def format_value(x):
     else:
         return str(x)
 
-def recursive_execute(server, prompt, output_state, current_item, extra_data, executed, prompt_id, outputs_ui, object_storage):
+def recursive_execute(server, prompt, output_state, current_item, extra_data, executed, prompt_id, outputs_ui, object_storage, blocked):
     unique_id = current_item
     inputs = prompt[unique_id]['inputs']
     input_ids = {}
     class_type = prompt[unique_id]['class_type']
     class_def = nodes.NODE_CLASS_MAPPINGS[class_type]
+    logging.info(f"Executing node {unique_id}")
+    if unique_id in blocked:
+        logging.info(f"Node {unique_id} is blocked")
+        return (True, None, None)
     if unique_id in output_state and output_state[unique_id]['state'] == 'cached':
+        logging.info(f"Node {unique_id} is cached")
         return (True, None, None)
 
     is_leaf = True
     is_cached = True
+    is_continue = hasattr(class_def, 'CONTINUE')
     for x in inputs:
         input_data = inputs[x]
 
@@ -137,11 +143,17 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
             input_ids[x] = input_unique_id
             
             if input_unique_id not in output_state or output_state[input_unique_id]['state'] == 'dirty':
-                result = recursive_execute(server, prompt, output_state, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage)
+                result = recursive_execute(server, prompt, output_state, input_unique_id, extra_data, executed, prompt_id, outputs_ui, object_storage, blocked)
                 if result[0] is not True:
                     # Another node failed further upstream
                     return result
-            if output_state[input_unique_id]['state'] != 'cached':
+                if input_unique_id in blocked and not is_continue:
+                    blocked[unique_id] = True
+                    if unique_id in output_state:
+                        output_state[unique_id]['state'] = 'dirty'
+                    logging.info(f"Node {unique_id} parent {input_unique_id} is blocked")
+                    return (True, None, None)
+            if input_unique_id not in output_state or output_state[input_unique_id]['state'] != 'cached':
                 is_cached = False
         else:
             input_ids[x] = 'literal'
@@ -152,19 +164,37 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
                 is_cached = False
         if is_cached:
             output_state[unique_id]['state'] = 'cached'
+            logging.info(f"Node {unique_id} parents are cached")
             return (True, None, None)
 
     input_data_all = None
     try:
         input_data_all = get_input_data(inputs, class_def, unique_id, output_state, prompt, extra_data)
         
-        if unique_id in output_state and unique_id in prompt and hasattr(class_def, 'IS_CHANGED'):
+        if hasattr(class_def, 'IS_CONTROLLED'):
+            try:
+                is_controlled = map_node_over_list(class_def, input_data_all, "IS_CONTROLLED")[0]
+                if is_controlled == 'blocked':
+                    if unique_id in output_state:
+                        output_state[unique_id]['state'] = 'dirty'
+                    blocked[unique_id] = True
+                    logging.info(f"Node {unique_id} is controlled as blocked")
+                    return (True, None, None)
+                if is_controlled == 'cached' and unique_id in output_state:
+                    output_state[unique_id]['state'] = 'cached'
+                    logging.info(f"Node {unique_id} is controlled as cached")
+                    return (True, None, None)
+            except:
+                pass
+        
+        if unique_id in output_state and hasattr(class_def, 'IS_CHANGED'):
             try:
                 is_changed_old = prompt[unique_id]['is_changed']
                 is_changed = map_node_over_list(class_def, input_data_all, "IS_CHANGED")
                 prompt[unique_id]['is_changed'] = is_changed
                 if is_changed and is_changed == is_changed_old:
                     output_state[unique_id]['state'] = 'cached'
+                    logging.info(f"Node {unique_id} is not changed")
                     return (True, None, None)
             except:
                 pass
@@ -231,15 +261,16 @@ def recursive_execute(server, prompt, output_state, current_item, extra_data, ex
 
     return (True, None, None)
 
-def recursive_will_execute(prompt, current_outputs, current_item, memo={}):
+def recursive_will_execute(prompt, output_state, current_item, blocked, memo={}):
     unique_id = current_item
+    is_cached = unique_id in output_state and output_state[unique_id]['state'] == 'cached'
 
     if unique_id in memo:
         return memo[unique_id]
 
     inputs = prompt[unique_id]['inputs']
     will_execute = []
-    if unique_id in current_outputs:
+    if is_cached or unique_id in blocked:
         return []
 
     for x in inputs:
@@ -247,13 +278,13 @@ def recursive_will_execute(prompt, current_outputs, current_item, memo={}):
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in current_outputs:
-                will_execute += recursive_will_execute(prompt, current_outputs, input_unique_id, memo)
+            if not is_cached:
+                will_execute += recursive_will_execute(prompt, output_state, input_unique_id, blocked, memo)
 
     memo[unique_id] = will_execute + [unique_id]
     return memo[unique_id]
 
-def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current_item):
+def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current_item, blocked):
     unique_id = current_item
     inputs = prompt[unique_id]['inputs']
     class_type = prompt[unique_id]['class_type']
@@ -262,6 +293,24 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
     is_changed_old = ''
     is_changed = ''
     to_delete = False
+    is_continue = hasattr(class_def, 'CONTINUE')
+    
+    if hasattr(class_def, 'IS_CONTROLLED'):
+        input_data_all = get_input_data(inputs, class_def, unique_id, output_state, {}, {}, True)
+        if input_data_all is not None:
+            try:
+                is_controlled = map_node_over_list(class_def, input_data_all, "IS_CONTROLLED")[0]
+                if is_controlled == 'blocked':
+                    if unique_id in output_state:
+                        output_state[unique_id]['state'] = 'dirty'
+                    blocked[unique_id] = True
+                    return False
+                if is_controlled == 'cached' and unique_id in output_state:
+                    output_state[unique_id]['state'] = 'cached'
+                    return False
+            except:
+                pass
+    
     if hasattr(class_def, 'IS_CHANGED'):
         if unique_id in old_prompt and 'is_changed' in old_prompt[unique_id]:
             is_changed_old = old_prompt[unique_id]['is_changed']
@@ -297,7 +346,11 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
                     input_unique_id = input_data[0]
                     output_index = input_data[1]
                     if input_unique_id in output_state and output_state[input_unique_id]['state'] == 'clean':
-                        to_delete = recursive_output_delete_if_changed(prompt, old_prompt, output_state, input_unique_id)
+                        to_delete = recursive_output_delete_if_changed(prompt, old_prompt, output_state, input_unique_id, blocked)
+                    elif input_unique_id in blocked and not is_continue:
+                        blocked[unique_id] = True
+                        output_state[unique_id]['state'] = 'dirty'
+                        return False
                     elif input_unique_id not in output_state or output_state[input_unique_id]['state'] != 'cached':
                         to_delete = True
                     if to_delete:
@@ -405,35 +458,37 @@ class PromptExecutor:
             for o in to_delete:
                 d = self.object_storage.pop(o)
                 del d
+            blocked = {}
 
             for x in prompt:
-                recursive_output_delete_if_changed(prompt, self.old_prompt, self.output_state, x)
+                recursive_output_delete_if_changed(prompt, self.old_prompt, self.output_state, x, blocked)
 
-            current_outputs = set(filter(lambda x: self.output_state[x]['state'] == 'cached', self.output_state.keys()))
+            cached_nodes = set(filter(lambda x: self.output_state[x]['state'] == 'cached', self.output_state.keys()))
 
             comfy.model_management.cleanup_models(keep_clone_weights_loaded=True)
             self.add_message("execution_cached",
-                          { "nodes": list(current_outputs) , "prompt_id": prompt_id},
+                          { "nodes": list(cached_nodes) , "prompt_id": prompt_id},
                           broadcast=False)
             executed = set()
             output_node_id = None
             to_execute = []
 
             for node_id in list(execute_outputs):
-                to_execute += [(0, node_id)]
+                if node_id not in blocked:
+                    to_execute += [(0, node_id)]
 
             while len(to_execute) > 0:
                 #always execute the output that depends on the least amount of unexecuted nodes first
                 memo = {}
-                to_execute = sorted(list(map(lambda a: (len(recursive_will_execute(prompt, current_outputs, a[-1], memo)), a[-1]), to_execute)))
+                to_execute = sorted(list(map(lambda a: (len(recursive_will_execute(prompt, self.output_state, a[-1], blocked, memo)), a[-1]), to_execute)))
                 output_node_id = to_execute.pop(0)[-1]
 
                 # This call shouldn't raise anything if there's an error deep in
                 # the actual SD code, instead it will report the node where the
                 # error was raised
-                self.success, error, ex = recursive_execute(self.server, prompt, self.output_state, output_node_id, extra_data, executed, prompt_id, self.outputs_ui, self.object_storage)
+                self.success, error, ex = recursive_execute(self.server, prompt, self.output_state, output_node_id, extra_data, executed, prompt_id, self.outputs_ui, self.object_storage, blocked)
                 if self.success is not True:
-                    self.handle_execution_error(prompt_id, prompt, current_outputs, executed, error, ex)
+                    self.handle_execution_error(prompt_id, prompt, cached_nodes, executed, error, ex)
                     break
             
             for x in list(self.outputs_ui.keys()):
