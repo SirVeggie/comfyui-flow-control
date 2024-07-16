@@ -20,7 +20,7 @@ def get_input_data(inputs, class_def, unique_id, output_state={}, prompt={}, ext
         if isinstance(input_data, list):
             input_unique_id = input_data[0]
             output_index = input_data[1]
-            if input_unique_id not in output_state or only_primitive or prompt[input_unique_id]['blocked']:
+            if input_unique_id not in output_state or only_primitive or (prompt and prompt[input_unique_id]['blocked']):
                 input_data_all[x] = (None,)
                 continue
             obj = output_state[input_unique_id]['output'][output_index]
