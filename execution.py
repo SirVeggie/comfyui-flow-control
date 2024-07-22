@@ -186,6 +186,8 @@ def recursive_execute(server, prompt, old_prompt, output_state, current_item, ex
         if unique_id in output_state and hasattr(class_def, 'IS_CACHED'):
             try:
                 is_cached_old = prompt[unique_id]['is_cached']
+                if is_leaf:
+                    is_cached_old = old_prompt[unique_id]['is_cached'] if unique_id in old_prompt else None
                 is_cached = map_node_over_list(class_def, input_data_all, "IS_CACHED")
                 prompt[unique_id]['is_cached'] = is_cached
                 if is_cached and is_cached == is_cached_old:
