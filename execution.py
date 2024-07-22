@@ -157,7 +157,7 @@ def recursive_execute(server, prompt, old_prompt, output_state, current_item, ex
         else:
             input_ids[x] = 'literal'
     
-    if unique_id in output_state and not is_leaf:
+    if unique_id in output_state and not is_leaf and inputs == old_prompt[unique_id]['inputs']:
         for x in input_ids:
             if x not in output_state[unique_id]['inputs'] or output_state[unique_id]['inputs'][x] != input_ids[x]:
                 is_cached = False
@@ -508,9 +508,9 @@ class PromptExecutor:
                     self.old_prompt[x] = copy.deepcopy(prompt[x])
             to_delete = []
             for x in self.output_state:
-                if self.output_state[x]['state'] == 'dirty':
+                if prompt[x]['blocked']:
                     to_delete += [x]
-                elif prompt[x]['blocked']:
+                elif self.output_state[x]['state'] == 'dirty':
                     to_delete += [x]
             for x in to_delete:
                 d = self.output_state.pop(x)
