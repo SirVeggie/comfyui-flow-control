@@ -183,12 +183,12 @@ def recursive_execute(server, prompt, old_prompt, output_state, current_item, ex
             except:
                 pass
         
-        if unique_id in output_state and hasattr(class_def, 'IS_CHANGED'):
+        if unique_id in output_state and hasattr(class_def, 'IS_CACHED'):
             try:
-                is_changed_old = prompt[unique_id]['is_changed']
-                is_changed = map_node_over_list(class_def, input_data_all, "IS_CHANGED")
-                prompt[unique_id]['is_changed'] = is_changed
-                if is_changed and is_changed == is_changed_old:
+                is_cached_old = prompt[unique_id]['is_cached']
+                is_cached = map_node_over_list(class_def, input_data_all, "IS_CACHED")
+                prompt[unique_id]['is_cached'] = is_cached
+                if is_cached and is_cached == is_cached_old:
                     output_state[unique_id]['state'] = 'cached'
                     return (True, None, None)
             except:
@@ -305,6 +305,17 @@ def recursive_output_delete_if_changed(prompt, old_prompt, output_state, current
                     return False
             except:
                 pass
+    
+    if hasattr(class_def, 'IS_CACHED'):
+        if 'is_cached' not in prompt[unique_id]:
+            input_data_all = get_input_data(inputs, class_def, unique_id, output_state)
+            if input_data_all is not None:
+                try:
+                    #is_cached = class_def.IS_CACHED(**input_data_all)
+                    is_cached = map_node_over_list(class_def, input_data_all, "IS_CACHED")
+                    prompt[unique_id]['is_cached'] = is_cached
+                except:
+                    to_delete = True
     
     if hasattr(class_def, 'IS_CHANGED'):
         if unique_id in old_prompt and 'is_changed' in old_prompt[unique_id]:
