@@ -1,6 +1,8 @@
 ## ComfyUI Dynamic Flow Control
 
-Supports node caching, dynamic branch blocking/switching, smarter node output reuse
+Supports node caching, dynamic branch blocking/switching, smarter node output reuse.
+
+Note: No longer compatible with latest version of ComfyUI.
 
 ### How to use
 
